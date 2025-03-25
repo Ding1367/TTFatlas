@@ -77,20 +77,15 @@ static int _InitDirectory(FONT *font) {
     struct ___16 {
         uint64_t a[2];
     };
-    for (int i = offset_sub->nTables; i; i--) {
+    for (int i = offset_sub->nTables; i + 1; i--) {
         // what the fuck
         tables[i] = *(FONT_TABLE *)&((struct ___16*)tables)[i]; // move the 16-byte TTF tables to the first 16 bytes of one of the 24-byte elements
-    }
 
-
-    // load data for each table
-    for (int i = 0; i < offset_sub->nTables; i++) {
+        // read table data
         FONT_TABLE *table = &tables[i];
-        // just to save a loop; convert structure data to little endian types
         var_be_le_32(table->checksum);
         var_be_le_32(table->offset);
         var_be_le_32(table->length);
-
         // position file pointer
         if (fseek(f, table->offset, SEEK_SET) == -1) {
             free(tables);
