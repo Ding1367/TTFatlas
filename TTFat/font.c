@@ -65,38 +65,23 @@ static int _InitDirectory(FONT *font) {
     var_be_le_16(offset_sub->rangeShift);
 
     dir->tables = NULL;
-    FONT_TABLE *tables = malloc(sizeof_FONT_TABLE * offset_sub->nTables);
+    FONT_TABLE *tables = malloc(sizeof(FONT_TABLE) * offset_sub->nTables);
     if (!tables) return 0;
-
-    // for (int i = 0; i < offset_sub->nTables; i++){
-    //     FONT_TABLE *table = &tables[i];
-    //     if (fread(table, sizeof_FONT_TABLE, 1, f) < 1) {
-    //         free(tables);
-    //         return 0;
-    //     }
-    //     var_be_le_32(table->checksum);
-    //     var_be_le_32(table->offset);
-    //     var_be_le_32(table->length);
-    //
-    //     // read data; we must save the position and restore it back to the contiguous block of tables to obtain the table data
-    //     char *data = malloc(table->length);
-    //     if (data == NULL){
-    //         free(tables);
-    //         return 0;
-    //     }
-    //     if (fread(data, table->length, 1, f) < 1){
-    //         free(data);
-    //         free(tables);
-    //         return 0;
-    //     }
-    //     table->data = data;
-    //     printf("%d\t%.4s\n", i, table->tag);
-    // }
     // read contiguous array of nTables FONT_TABLEs
     if (fread(tables, sizeof_FONT_TABLE, offset_sub->nTables, f) < offset_sub->nTables) {
         free(tables);
         return 0;
     }
+
+    // align structs (the horrors of inconsistent sizing)
+    struct ___16 {
+        uint64_t a[2];
+    };
+    for (int i = offset_sub->nTables; i; i--) {
+        // what the fuck
+        tables[i] = *(FONT_TABLE *)&((struct ___16*)tables)[i]; // move the 16-byte TTF tables to the first 16 bytes of one of the 24-byte elements
+    }
+
 
     // load data for each table
     for (int i = 0; i < offset_sub->nTables; i++) {
@@ -109,18 +94,18 @@ static int _InitDirectory(FONT *font) {
         // position file pointer
         if (fseek(f, table->offset, SEEK_SET) == -1) {
             free(tables);
-            break;
+            return 0;
         }
         // mallocate data and read
         char *table_data = malloc(table->length);
         if (table_data == NULL) {
             free(tables);
-            break;
+            return 0;
         }
         if (fread(table_data, 1, table->length, f) < table->length) {
             free(tables);
             free(table_data);
-            break;
+            return 0;
         }
         table->data = table_data;
     }
