@@ -77,7 +77,7 @@ static int _InitDirectory(FONT *font) {
     struct ___16 {
         uint64_t a[2];
     };
-    for (int i = offset_sub->nTables; i + 1; i--) {
+    for (int i = offset_sub->nTables; --i+1;) {
         // what the fuck
         tables[i] = *(FONT_TABLE *)&((struct ___16*)tables)[i]; // move the 16-byte TTF tables to the first 16 bytes of one of the 24-byte elements
 
@@ -139,8 +139,7 @@ FONT* TTFat_OpenFont(const char* dst) {
 
 void TTFat_DestroyFont(FONT* font) {
     _glyph_list_t *node = font->glyphs_head;
-    for(;;) {
-        if (node == NULL) break;
+    while (node != NULL) {
         _glyph_list_t *next = node->next;
         free(node);
         node = next;
