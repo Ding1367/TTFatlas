@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 typedef struct glyph {
     int16_t numContours;
@@ -17,17 +18,29 @@ typedef struct glyph_list {
     struct glyph_list *next;
 } _glyph_list_t;
 
+typedef struct FONT_TABLE {
+    char tag[4];
+    uint32_t checksum;
+    uint32_t offset;
+    uint32_t length;
+    char *data;
+} FONT_TABLE;
+
 typedef struct font_directory {
-    uint32_t scalar;
-    uint16_t nTables;
-    uint16_t searchRange, entrySelector, rangeShift;
+    struct offset_subtable {
+        uint32_t scalar;
+        uint16_t nTables;
+        uint16_t searchRange, entrySelector, rangeShift;
+    } offsetSubtable;
+    FONT_TABLE *tables;
 } _font_directory_t;
+
+typedef struct offset_subtable _offset_subtable_t;
 
 struct FONT {
     FILE *f;
-    FONT_INFO info;
     _glyph_list_t *glyphs_head;
-    _font_directory_t *dir;
+    _font_directory_t dir;
 };
 
 typedef FONT _FONT;
@@ -37,31 +50,92 @@ typedef FONT _FONT;
 #define var_be_le_16(expr) expr = be_le_16(expr)
 #define var_be_le_32(expr) expr = be_le_32(expr)
 
-static int _InitDirectory(FONT *font) {
-    // first, get the info
-    FILE *f = font->f;
-    if (fread(&font->info, sizeof(FONT_INFO), 1, f) < 1) {
-        return 0;
-    }
-    FONT_INFO *info = &font->info;
-    var_be_le_32(info->signature);
-    var_be_le_32(info->version);
-    var_be_le_32(info->directoryOffset);
+#define sizeof_FONT_TABLE (sizeof(FONT_TABLE) - sizeof(char*))
 
-    if (fseek(f, info->directoryOffset, SEEK_SET) == -1) {
+static int _InitDirectory(FONT *font) {
+    FILE *f = font->f;
+    _font_directory_t *dir = &font->dir;
+    _offset_subtable_t *offset_sub = &dir->offsetSubtable;
+    if (fread(offset_sub, sizeof(_offset_subtable_t), 1, f) < 1) return 0;
+
+    var_be_le_32(offset_sub->scalar);
+    var_be_le_16(offset_sub->nTables);
+    var_be_le_16(offset_sub->searchRange);
+    var_be_le_16(offset_sub->entrySelector);
+    var_be_le_16(offset_sub->rangeShift);
+
+    dir->tables = NULL;
+    FONT_TABLE *tables = malloc(sizeof_FONT_TABLE * offset_sub->nTables);
+    if (!tables) return 0;
+
+    // for (int i = 0; i < offset_sub->nTables; i++){
+    //     FONT_TABLE *table = &tables[i];
+    //     if (fread(table, sizeof_FONT_TABLE, 1, f) < 1) {
+    //         free(tables);
+    //         return 0;
+    //     }
+    //     var_be_le_32(table->checksum);
+    //     var_be_le_32(table->offset);
+    //     var_be_le_32(table->length);
+    //
+    //     // read data; we must save the position and restore it back to the contiguous block of tables to obtain the table data
+    //     char *data = malloc(table->length);
+    //     if (data == NULL){
+    //         free(tables);
+    //         return 0;
+    //     }
+    //     if (fread(data, table->length, 1, f) < 1){
+    //         free(data);
+    //         free(tables);
+    //         return 0;
+    //     }
+    //     table->data = data;
+    //     printf("%d\t%.4s\n", i, table->tag);
+    // }
+    // read contiguous array of nTables FONT_TABLEs
+    if (fread(tables, sizeof_FONT_TABLE, offset_sub->nTables, f) < offset_sub->nTables) {
+        free(tables);
         return 0;
     }
-    font->dir = malloc(sizeof(_font_directory_t));
-    if (font->dir == NULL) return 0;
-    if (fread(font->dir, sizeof(_font_directory_t), 1, f) < 1) {
-        return 0;
+
+    // load data for each table
+    for (int i = 0; i < offset_sub->nTables; i++) {
+        FONT_TABLE *table = &tables[i];
+        // just to save a loop; convert structure data to little endian types
+        var_be_le_32(table->checksum);
+        var_be_le_32(table->offset);
+        var_be_le_32(table->length);
+
+        // position file pointer
+        if (fseek(f, table->offset, SEEK_SET) == -1) {
+            free(tables);
+            break;
+        }
+        // mallocate data and read
+        char *table_data = malloc(table->length);
+        if (table_data == NULL) {
+            free(tables);
+            break;
+        }
+        if (fread(f, 1, table->length, f) < table->length) {
+            free(tables);
+            free(table_data);
+            break;
+        }
+        table->data = table_data;
     }
-    var_be_le_32(font->dir->scalar);
-    var_be_le_16(font->dir->nTables);
-    var_be_le_16(font->dir->searchRange);
-    var_be_le_16(font->dir->entrySelector);
-    var_be_le_16(font->dir->rangeShift);
+    dir->tables = tables;
     return 1;
+}
+
+static FONT_TABLE *_GetFontTable(FONT *font, char *tag){
+    for (int i = 0; i < font->dir.offsetSubtable.nTables; i++){
+        FONT_TABLE *t = &font->dir.tables[i];
+        if (strncmp(t->tag, tag, 4) == 0){
+            return t;
+        }
+    }
+    return NULL;
 }
 
 FONT* TTFat_OpenFont(const char* dst) {
@@ -75,12 +149,10 @@ FONT* TTFat_OpenFont(const char* dst) {
         font->f = file;
         if (!_InitDirectory(font)) {
             fclose(file);
-            free(font->dir);
             free(font);
             return NULL;
         }
         font->glyphs_head = NULL;
-        font->dir = NULL;
     }
     return font;
 }
@@ -93,10 +165,13 @@ void TTFat_DestroyFont(FONT* font) {
         free(node);
         node = next;
     }
+    FONT_TABLE *tables = font->dir.tables;
+    if (tables) {
+        for (int i = 0; i < font->dir.offsetSubtable.nTables; i++) {
+            free(tables[i].data);
+        }
+        free(tables);
+    }
     fclose(font->f);
     free(font);
-}
-
-FONT_INFO* TTFat_GetInfo(FONT* font) {
-    return &font->info;
 }
