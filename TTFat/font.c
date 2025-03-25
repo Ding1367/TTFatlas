@@ -117,7 +117,7 @@ static int _InitDirectory(FONT *font) {
             free(tables);
             break;
         }
-        if (fread(f, 1, table->length, f) < table->length) {
+        if (fread(table_data, 1, table->length, f) < table->length) {
             free(tables);
             free(table_data);
             break;
